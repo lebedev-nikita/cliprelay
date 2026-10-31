@@ -219,15 +219,17 @@ final class StatusBarController {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
-        let updateTitle: String
-        if let version = availableUpdateVersion {
-            updateTitle = "Update Available (\(version))"
-        } else {
-            updateTitle = "Check for Updates\u{2026}"
+        if SettingsModel.inAppUpdatesEnabled {
+            let updateTitle: String
+            if let version = availableUpdateVersion {
+                updateTitle = "Update Available (\(version))"
+            } else {
+                updateTitle = "Check for Updates\u{2026}"
+            }
+            let checkForUpdatesItem = NSMenuItem(title: updateTitle, action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
+            checkForUpdatesItem.target = updaterController
+            menu.addItem(checkForUpdatesItem)
         }
-        let checkForUpdatesItem = NSMenuItem(title: updateTitle, action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
-        checkForUpdatesItem.target = updaterController
-        menu.addItem(checkForUpdatesItem)
 
         menu.addItem(NSMenuItem.separator())
 

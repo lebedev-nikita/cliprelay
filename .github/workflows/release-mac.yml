@@ -77,6 +77,8 @@ jobs:
 
       - name: Build
         run: ./scripts/build-all.sh --mac-only
+        env:
+          SPARKLE_FEED_URL: https://updates.cliprelay.org/appcast.xml
 
       - name: Sign, notarize, and create DMG
         run: ./scripts/publish-mac.sh --wait

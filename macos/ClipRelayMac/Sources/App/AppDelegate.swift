@@ -53,9 +53,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Creating the controller with startingUpdater:false in init() and
         // deferring start to here avoids a race where the updater's scheduled
         // cycle fires before the runloop is running.
-        updaterController.startUpdater()
-        if updaterController.updater.automaticallyChecksForUpdates {
-            updaterController.updater.checkForUpdatesInBackground()
+        if SettingsModel.inAppUpdatesEnabled {
+            updaterController.startUpdater()
+            if updaterController.updater.automaticallyChecksForUpdates {
+                updaterController.updater.checkForUpdatesInBackground()
+            }
         }
 
         UNUserNotificationCenter.current().delegate = updaterDriverDelegate

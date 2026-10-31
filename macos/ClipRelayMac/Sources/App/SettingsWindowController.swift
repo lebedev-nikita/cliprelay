@@ -97,11 +97,14 @@ private struct SettingsView: View {
                     """)
             }
 
-            Section("Updates") {
-                Toggle("Automatically check for updates", isOn: binding(\.automaticallyChecksForUpdates))
-                Toggle("Beta channel", isOn: binding(\.betaChannel))
-                Button(model.availableUpdateVersion.map { "Install Update (\($0))\u{2026}" } ?? "Check for Updates\u{2026}") {
-                    model.checkForUpdates()
+            if SettingsModel.inAppUpdatesEnabled {
+                updatesSection
+            } else {
+                Section("Updates") {
+                    Text("This build is updated with Homebrew:")
+                    Text("brew upgrade --cask lebedev-nikita/tap/cliprelay")
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
                 }
             }
 
@@ -124,6 +127,16 @@ private struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 440)
         .frame(minHeight: 560)
+    }
+
+    private var updatesSection: some View {
+        Section("Updates") {
+            Toggle("Automatically check for updates", isOn: binding(\.automaticallyChecksForUpdates))
+            Toggle("Beta channel", isOn: binding(\.betaChannel))
+            Button(model.availableUpdateVersion.map { "Install Update (\($0))\u{2026}" } ?? "Check for Updates\u{2026}") {
+                model.checkForUpdates()
+            }
+        }
     }
 
     private func deviceRow(_ peer: PeerSummary) -> some View {
