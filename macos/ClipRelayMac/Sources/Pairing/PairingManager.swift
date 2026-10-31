@@ -56,7 +56,7 @@ final class PairingManager {
     /// app is not running.
     private var devicesCache: [PairedDevice]?
 
-    init(keychain: SecretStore = KeychainStore(service: "cliprelay")) {
+    init(keychain: SecretStore = CombinedSecretStore.shared) {
         self.keychain = keychain
     }
 

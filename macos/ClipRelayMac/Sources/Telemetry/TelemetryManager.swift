@@ -93,7 +93,7 @@ final class TelemetryManager {
     }
 
     private static func resolveInstallId() -> String {
-        let store = KeychainStore(service: "org.cliprelay")
+        let store = CombinedSecretStore.shared
         if let existing = store.data(for: keychainAccount),
            let id = String(data: existing, encoding: .utf8), !id.isEmpty {
             return id
