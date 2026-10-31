@@ -48,6 +48,11 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    /// Builds without a Sparkle feed are updated through Homebrew instead.
+    static var inAppUpdatesEnabled: Bool {
+        Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") != nil
+    }
+
     static var isMenuBarIconVisible: Bool {
         UserDefaults.standard.object(forKey: showMenuBarIconKey) as? Bool ?? true
     }

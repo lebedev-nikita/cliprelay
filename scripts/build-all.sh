@@ -13,8 +13,18 @@ ANDROID_PROJECT_DIR="$ROOT_DIR/android"
 # EdDSA public key for Sparkle update signature verification.
 # This is the verification (public) key — safe to commit. Override via SPARKLE_PUBLIC_KEY env var if needed.
 SPARKLE_PUBLIC_KEY="${SPARKLE_PUBLIC_KEY:-MvvTVBZwmJX4xjRViW6SBISRMDdzdVkVdO5KVB/7z8I=}"
-SPARKLE_PLIST_KEYS="<key>SUPublicEDKey</key>
-    <string>${SPARKLE_PUBLIC_KEY}</string>"
+# In-app (Sparkle) updates are off unless SPARKLE_FEED_URL is set: this fork ships
+# through Homebrew, and the upstream feed would replace fork builds.
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-}"
+SPARKLE_PLIST_KEYS=""
+if [[ -n "$SPARKLE_FEED_URL" ]]; then
+  SPARKLE_PLIST_KEYS="<key>SUFeedURL</key>
+  <string>${SPARKLE_FEED_URL}</string>
+  <key>SUScheduledCheckInterval</key>
+  <integer>7200</integer>
+  <key>SUPublicEDKey</key>
+  <string>${SPARKLE_PUBLIC_KEY}</string>"
+fi
 
 BUILD_MAC=true
 BUILD_ANDROID=true
@@ -152,10 +162,6 @@ build_mac() {
   <string>ClipRelay uses Bluetooth Low Energy to discover and sync clipboard text with your paired Android devices.</string>
   <key>LSUIElement</key>
   <true/>
-  <key>SUFeedURL</key>
-  <string>https://updates.cliprelay.org/appcast.xml</string>
-  <key>SUScheduledCheckInterval</key>
-  <integer>7200</integer>
   ${SPARKLE_PLIST_KEYS}
 </dict>
 </plist>
