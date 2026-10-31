@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let updaterDriverDelegate = UpdaterDriverDelegate()
     private let pairingManager = PairingManager()
     private let statusBarController: StatusBarController
+    private let settingsModel: SettingsModel
+    private let settingsWindowController: SettingsWindowController
     private let clipboardWriter = ClipboardWriter()
     private let notificationManager = ReceiveNotificationManager()
     private let pairingWindowController = PairingWindowController()
@@ -25,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updaterController = SPUStandardUpdaterController(
             startingUpdater: false, updaterDelegate: updaterDelegate, userDriverDelegate: updaterDriverDelegate)
         statusBarController = StatusBarController(updaterController: updaterController)
+        settingsModel = SettingsModel(updaterController: updaterController)
+        settingsWindowController = SettingsWindowController(model: settingsModel)
         super.init()
     }
 
@@ -63,8 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updaterDriverDelegate.onUpdateAvailabilityChanged = { [weak self] in
             guard let self else { return }
             DispatchQueue.main.async {
-                self.statusBarController.setAvailableUpdateVersion(
-                    self.updaterDriverDelegate.availableUpdateVersion)
+                let version = self.updaterDriverDelegate.availableUpdateVersion
+                self.statusBarController.setAvailableUpdateVersion(version)
+                self.settingsModel.availableUpdateVersion = version
             }
         }
         statusBarController.onPairNewDeviceRequested = { [weak self] in
@@ -73,7 +78,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusBarController.onForgetDeviceRequested = { [weak self] token in
             self?.forgetDevice(token: token)
         }
-        statusBarController.onToggleLaunchAtLogin = {
+        statusBarController.onOpenSettingsRequested = { [weak self] in
+            self?.settingsWindowController.show()
+        }
+        settingsModel.onPairNewDeviceRequested = { [weak self] in
+            self?.startPairing()
+        }
+        settingsModel.onForgetDeviceRequested = { [weak self] token in
+            self?.forgetDevice(token: token)
+        }
+        settingsModel.onShowMenuBarIconChanged = { [weak self] visible in
+            self?.statusBarController.setIconVisible(visible)
+        }
+        settingsModel.onToggleLaunchAtLogin = {
             let service = SMAppService.mainApp
             do {
                 if service.status == .enabled {
@@ -85,24 +102,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appLogger.error("[App] Failed to toggle launch at login: \(error.localizedDescription)")
             }
         }
-        statusBarController.isLaunchAtLoginEnabled = {
+        settingsModel.isLaunchAtLoginEnabled = {
             SMAppService.mainApp.status == .enabled
         }
-        statusBarController.onToggleImageSync = { [weak self] in
+        settingsModel.onToggleImageSync = { [weak self] in
             self?.connectionController?.toggleImageSync()
         }
-        statusBarController.onSkipSecretsEnabled = { [weak self] in
+        settingsModel.onSkipSecretsEnabled = { [weak self] in
             // Text cached for reconnect-replay while the filter was off may be a
             // secret — drop it so it can't bypass the filter on reconnect.
             self?.connectionController?.clearPendingClipboard()
         }
-        statusBarController.isImageSyncEnabled = { [weak self] in
+        settingsModel.isImageSyncEnabled = { [weak self] in
             self?.connectionController?.isImageSyncEnabled ?? false
         }
-        statusBarController.isDeviceConnected = { [weak self] in
+        settingsModel.isDeviceConnected = { [weak self] in
             self?.connectionController?.isConnected ?? false
         }
-        statusBarController.bleStateProvider = { [weak self] in
+        settingsModel.bleStateProvider = { [weak self] in
             if self?.connectionController?.isConnected == true { return "connected" }
             let isPaired = !(self?.pairingManager.loadDevices().isEmpty ?? true)
             return isPaired ? "searching" : "unpaired"
@@ -160,16 +177,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 == OSType(keyAELaunchedAsLogInItem)
     }
 
-    /// Entry UI for launches/reopens where the user acted deliberately:
-    /// unpaired opens pairing, paired shows the status menu at the cursor.
+    /// Entry UI for launches/reopens where the user acted deliberately: unpaired opens
+    /// pairing; paired shows the status menu at the cursor, or the Settings window when
+    /// the user has hidden the menu bar icon.
     private func showEntryUI() {
         NSApp.activate(ignoringOtherApps: true)
         if pairingManager.loadDevices().isEmpty {
             if !awaitingNewPairingConnection {
                 startPairing()
             }
-        } else {
+        } else if statusBarController.isIconVisible {
             statusBarController.popUpMenuAtMouse()
+        } else {
+            settingsWindowController.show()
         }
     }
 
@@ -261,11 +281,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func handleSystemWillSleep(_ notification: Notification) {
         bluetoothOffDebounceTimer?.invalidate()
         bluetoothOffDebounceTimer = nil
-        statusBarController.setBluetoothWarning(nil)
+        setBluetoothWarning(nil)
     }
 
     @objc private func handleSystemDidWake(_ notification: Notification) {
         lastWakeTime = Date()
+    }
+
+    private func setBluetoothWarning(_ warning: String?, action: (() -> Void)? = nil) {
+        statusBarController.setBluetoothWarning(warning, action: action)
+        settingsModel.bluetoothWarning = warning
+        settingsModel.bluetoothWarningAction = action
     }
 
     private func showBluetoothAlert(message: String, info: String) {
@@ -300,6 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         .sorted { $0.description.localizedCaseInsensitiveCompare($1.description) == .orderedAscending }
 
         statusBarController.setTrustedPeers(peers)
+        settingsModel.trustedPeers = peers
     }
 
     private func deviceStableID(token: String) -> UUID {
@@ -329,7 +356,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 extension AppDelegate: ConnectionControllerDelegate {
     func didChangeState(connectedTokens: [String]) {
-        statusBarController.setConnectedPeers(peerSummaries(for: connectedTokens))
+        let peers = peerSummaries(for: connectedTokens)
+        statusBarController.setConnectedPeers(peers)
+        settingsModel.connectedPeerIDs = Set(peers.map(\.id))
     }
 
     private func peerSummaries(for tokens: [String]) -> [PeerSummary] {
@@ -383,7 +412,7 @@ extension AppDelegate: ConnectionControllerDelegate {
         case .poweredOn:
             bluetoothOffDebounceTimer?.invalidate()
             bluetoothOffDebounceTimer = nil
-            statusBarController.setBluetoothWarning(nil)
+            setBluetoothWarning(nil)
         case .unauthorized:
             // Cancel a pending powered-off settle so it can't later overwrite this more
             // specific warning (and its Privacy-pane link) with the generic message.
@@ -391,7 +420,7 @@ extension AppDelegate: ConnectionControllerDelegate {
             bluetoothOffDebounceTimer = nil
             // Permission denied is a stable, genuinely actionable state: surface it
             // immediately. Clicking the menu row opens the Privacy settings pane.
-            statusBarController.setBluetoothWarning("Allow Bluetooth access for ClipRelay") { [weak self] in
+            setBluetoothWarning("Allow Bluetooth access for ClipRelay") { [weak self] in
                 self?.openBluetoothSettings(privacy: true)
             }
         case .poweredOff:
@@ -416,7 +445,7 @@ extension AppDelegate: ConnectionControllerDelegate {
     }
 
     private func showBluetoothOffWarning() {
-        statusBarController.setBluetoothWarning("Bluetooth is turned off - please enable Bluetooth for ClipRelay to resume sync.") { [weak self] in
+        setBluetoothWarning("Bluetooth is turned off - please enable Bluetooth for ClipRelay to resume sync.") { [weak self] in
             self?.openBluetoothSettings(privacy: false)
         }
     }
@@ -435,10 +464,7 @@ extension AppDelegate: ConnectionControllerDelegate {
     }
 
     func didChangeImageSyncSetting(enabled: Bool) {
-        // Refresh the menu to update the checkmark
-        if let cc = connectionController {
-            statusBarController.setConnectedPeers(peerSummaries(for: cc.connectedTokens))
-        }
+        settingsModel.refresh()
     }
 
     func imageTransferFailed(reason: String) {

@@ -4,19 +4,11 @@ import AppKit
 import Foundation
 import QuartzCore
 import Sparkle
-import UserNotifications
 
 final class StatusBarController {
     var onPairNewDeviceRequested: (() -> Void)?
     var onForgetDeviceRequested: ((String) -> Void)?
-    var onToggleLaunchAtLogin: (() -> Void)?
-    var isLaunchAtLoginEnabled: (() -> Bool)?
-    var onToggleImageSync: (() -> Void)?
-    /// Fired when "Don't Sync Passwords & Secrets" flips to ON.
-    var onSkipSecretsEnabled: (() -> Void)?
-    var isImageSyncEnabled: (() -> Bool)?
-    var isDeviceConnected: (() -> Bool)?
-    var bleStateProvider: (() -> String)?
+    var onOpenSettingsRequested: (() -> Void)?
 
     private var availableUpdateVersion: String?
 
@@ -34,49 +26,48 @@ final class StatusBarController {
     private lazy var connectedDot: NSImage = makeStatusDot(color: Self.brandAqua)
     private lazy var disconnectedDot: NSImage = makeStatusDot(color: .tertiaryLabelColor)
 
-    private var baseStatusBarImage: NSImage?
-    private var syncPulseTimer: Timer?
+    private var statusBarImage: NSImage?
 
     init(updaterController: SPUStandardUpdaterController) {
         self.updaterController = updaterController
-        baseStatusBarImage = loadStatusBarIcon()
+        statusBarImage = loadStatusBarIcon()
+        statusItem.isVisible = SettingsModel.isMenuBarIconVisible
         updateStatusBarIcon()
         renderMenu()
     }
 
-    private func loadStatusBarIcon() -> NSImage? {
-        if let bundlePath = Bundle.main.path(forResource: "StatusBarIcon", ofType: "png") {
-            let image = NSImage(contentsOfFile: bundlePath)
-            image?.size = NSSize(width: 18, height: 18)
-            return image
+    var isIconVisible: Bool {
+        statusItem.isVisible
+    }
+
+    func setIconVisible(_ visible: Bool) {
+        statusItem.isVisible = visible
+        if visible {
+            updateStatusBarIcon()
         }
-        return nil
+    }
+
+    /// Template image: macOS tints it to match the menu bar (white on a dark bar) in every
+    /// state, so the icon never changes color. Loaded by name so the @2x variant is used.
+    private func loadStatusBarIcon() -> NSImage? {
+        guard let image = Bundle.main.image(forResource: "StatusBarIcon") else { return nil }
+        image.size = NSSize(width: 18, height: 18)
+        image.isTemplate = true
+        return image
     }
 
     private func updateStatusBarIcon() {
         guard let button = statusItem.button else { return }
-        guard let base = baseStatusBarImage else {
+        guard let image = statusBarImage else {
             button.title = "GP"
             return
         }
+        button.image = image
         if bluetoothWarning != nil {
-            // A Bluetooth problem means the app is inactive. Keep the normal template glyph
-            // (so it renders the same soft gray as idle, not a heavier solid black) and
-            // overlay a yellow warning badge on top.
-            let template = base.copy() as! NSImage
-            template.isTemplate = true
-            button.image = template
+            // A Bluetooth problem means the app is inactive: overlay a yellow warning badge.
             showWarningBadge(on: button)
-        } else if !connectedPeers.isEmpty {
-            hideWarningBadge(on: button)
-            let aqua = base.colorized(with: Self.brandAqua)
-            aqua.isTemplate = false
-            button.image = aqua
         } else {
             hideWarningBadge(on: button)
-            let template = base.copy() as! NSImage
-            template.isTemplate = true
-            button.image = template
         }
     }
 
@@ -160,31 +151,15 @@ final class StatusBarController {
 
     /// Briefly pulses the status bar icon to indicate a clipboard sync.
     func flashSyncIndicator() {
-        guard let button = statusItem.button, let base = baseStatusBarImage else { return }
-
-        // Cancel any in-progress pulse
-        syncPulseTimer?.invalidate()
-
-        // Show bright highlight icon
-        let highlight = base.colorized(with: .systemYellow)
-        highlight.isTemplate = false
-        button.image = highlight
-
-        // Enable layer-backed view for Core Animation
+        guard statusItem.isVisible, let button = statusItem.button else { return }
         button.wantsLayer = true
-        if let layer = button.layer {
-            let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
-            pulse.values = [1.0, 1.3, 1.0]
-            pulse.keyTimes = [0, 0.4, 1.0]
-            pulse.duration = 0.35
-            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            layer.add(pulse, forKey: "syncPulse")
-        }
-
-        // Restore normal icon after the animation completes
-        syncPulseTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak self] _ in
-            self?.updateStatusBarIcon()
-        }
+        guard let layer = button.layer else { return }
+        let pulse = CAKeyframeAnimation(keyPath: "transform.scale")
+        pulse.values = [1.0, 1.3, 1.0]
+        pulse.keyTimes = [0, 0.4, 1.0]
+        pulse.duration = 0.35
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        layer.add(pulse, forKey: "syncPulse")
     }
 
     // MARK: - Menu rendering
@@ -236,80 +211,13 @@ final class StatusBarController {
 
         menu.addItem(NSMenuItem.separator())
 
-        let launchItem = NSMenuItem(
-            title: "Launch at Login",
-            action: #selector(handleToggleLaunchAtLogin),
-            keyEquivalent: ""
+        let settingsItem = NSMenuItem(
+            title: "Settings\u{2026}",
+            action: #selector(handleOpenSettings),
+            keyEquivalent: ","
         )
-        launchItem.target = self
-        if isLaunchAtLoginEnabled?() == true {
-            launchItem.state = .on
-        }
-        menu.addItem(launchItem)
-
-        let deviceConnected = isDeviceConnected?() ?? false
-        let imageSyncItem = NSMenuItem(
-            title: "Image Sync (experimental)",
-            action: deviceConnected ? #selector(handleToggleImageSync) : nil,
-            keyEquivalent: ""
-        )
-        imageSyncItem.target = self
-        if !deviceConnected {
-            imageSyncItem.isEnabled = false
-        } else if isImageSyncEnabled?() == true {
-            imageSyncItem.state = .on
-        }
-        menu.addItem(imageSyncItem)
-
-        let skipSecretsItem = NSMenuItem(
-            title: "Don\u{2019}t Sync Passwords & Secrets",
-            action: #selector(handleToggleSkipSecrets),
-            keyEquivalent: ""
-        )
-        skipSecretsItem.target = self
-        skipSecretsItem.toolTip = """
-        When on, clipboard copies that an app marks as secret (concealed) are not sent to \
-        your phone — so passwords stay on this Mac. Works with password managers that flag \
-        copies as concealed, such as Bitwarden, 1Password and KeePassXC. \
-        Note: copies made from browser extensions aren't flagged and will still sync.
-        """
-        if ClipboardMonitor.skipSecretsEnabled {
-            skipSecretsItem.state = .on
-        }
-        menu.addItem(skipSecretsItem)
-
-        menu.addItem(NSMenuItem.separator())
-
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let versionItem = NSMenuItem(title: "ClipRelay v\(version)", action: nil, keyEquivalent: "")
-        versionItem.isEnabled = false
-        menu.addItem(versionItem)
-
-        let websiteItem = NSMenuItem(
-            title: "Visit Website\u{2026}",
-            action: #selector(handleVisitWebsite),
-            keyEquivalent: ""
-        )
-        websiteItem.target = self
-        menu.addItem(websiteItem)
-
-        let supportItem = NSMenuItem(title: "Feedback & Support", action: nil, keyEquivalent: "")
-        let supportMenu = NSMenu()
-        let issueItem = NSMenuItem(title: "Report Issue on GitHub\u{2026}", action: #selector(handleOpenGitHubIssue), keyEquivalent: "")
-        issueItem.target = self
-        supportMenu.addItem(issueItem)
-        let emailItem = NSMenuItem(title: "Email Support\u{2026}", action: #selector(handleOpenEmail), keyEquivalent: "")
-        emailItem.target = self
-        supportMenu.addItem(emailItem)
-        let copyLogsItem = NSMenuItem(title: "Copy Diagnostic Logs to Clipboard", action: #selector(handleCopyLogs), keyEquivalent: "")
-        copyLogsItem.target = self
-        supportMenu.addItem(copyLogsItem)
-        supportMenu.addItem(NSMenuItem.separator())
-        let discussionsItem = NSMenuItem(title: "Community Discussions\u{2026}", action: #selector(handleOpenDiscussions), keyEquivalent: "")
-        discussionsItem.target = self
-        supportMenu.addItem(discussionsItem)
-        supportItem.submenu = supportMenu
-        menu.addItem(supportItem)
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         let updateTitle: String
         if let version = availableUpdateVersion {
@@ -320,28 +228,6 @@ final class StatusBarController {
         let checkForUpdatesItem = NSMenuItem(title: updateTitle, action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)), keyEquivalent: "")
         checkForUpdatesItem.target = updaterController
         menu.addItem(checkForUpdatesItem)
-
-        let autoUpdateItem = NSMenuItem(
-            title: "Automatically Check for Updates",
-            action: #selector(handleToggleAutoUpdates),
-            keyEquivalent: ""
-        )
-        autoUpdateItem.target = self
-        if updaterController.updater.automaticallyChecksForUpdates {
-            autoUpdateItem.state = .on
-        }
-        menu.addItem(autoUpdateItem)
-
-        let betaItem = NSMenuItem(
-            title: "Beta Channel",
-            action: #selector(handleToggleBetaUpdates),
-            keyEquivalent: ""
-        )
-        betaItem.target = self
-        if isBetaChannelEnabled {
-            betaItem.state = .on
-        }
-        menu.addItem(betaItem)
 
         menu.addItem(NSMenuItem.separator())
 
@@ -422,174 +308,13 @@ final class StatusBarController {
     }
 
     @objc
-    private func handleToggleLaunchAtLogin() {
-        onToggleLaunchAtLogin?()
-        renderMenu()
-    }
-
-    @objc
-    private func handleToggleImageSync() {
-        onToggleImageSync?()
-        renderMenu()
-    }
-
-    @objc
-    private func handleToggleSkipSecrets() {
-        ClipboardMonitor.skipSecretsEnabled.toggle()
-        if ClipboardMonitor.skipSecretsEnabled {
-            onSkipSecretsEnabled?()
-        }
-        renderMenu()
-    }
-
-    @objc
-    private func handleVisitWebsite() {
-        if let url = URL(string: "https://cliprelay.org") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    @objc
-    private func handleOpenGitHubIssue() {
-        let context = deviceContext()
-        let body = "\n\n---\n" + context.map { "- **\($0.0):** \($0.1)" }.joined(separator: "\n")
-        var components = URLComponents(string: "https://github.com/geekflyer/cliprelay/issues/new")!
-        components.queryItems = [
-            URLQueryItem(name: "body", value: body),
-            URLQueryItem(name: "labels", value: "from-app"),
-        ]
-        if let url = components.url { NSWorkspace.shared.open(url) }
-    }
-
-    @objc
-    private func handleOpenEmail() {
-        let context = deviceContext()
-        let body = "\n\n---\n" + context.map { "\($0.0): \($0.1)" }.joined(separator: "\n")
-        var components = URLComponents(string: "mailto:info@cliprelay.org")!
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "ClipRelay Feedback"),
-            URLQueryItem(name: "body", value: body),
-        ]
-        if let url = components.url { NSWorkspace.shared.open(url) }
-    }
-
-    @objc
-    private func handleCopyLogs() {
-        let context = deviceContext()
-        DispatchQueue.global(qos: .userInitiated).async {
-            let text = LogShareExporter.exportLogs(deviceContext: context)
-            DispatchQueue.main.async {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(text, forType: .string)
-                // Mark the copy concealed so the skip-secrets filter keeps the log dump
-                // local; the 100 KB sync cap only catches dumps that outgrow it.
-                NSPasteboard.general.setString("", forType: ClipboardMonitor.concealedType)
-                Self.notifyLogsCopied(byteCount: text.utf8.count)
-            }
-        }
-    }
-
-    private static func notifyLogsCopied(byteCount: Int) {
-        guard Bundle.main.bundleIdentifier != nil else { return }
-        let kb = max(1, byteCount / 1024)
-        let content = UNMutableNotificationContent()
-        content.title = "Logs copied to clipboard"
-        content.body = "\(kb) KB ready to paste into a bug report."
-        let request = UNNotificationRequest(identifier: "logs-copied", content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
-    }
-
-    @objc
-    private func handleOpenDiscussions() {
-        if let url = URL(string: "https://github.com/geekflyer/cliprelay/discussions") {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
-    private func deviceContext() -> [(String, String)] {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
-        let os = ProcessInfo.processInfo.operatingSystemVersion
-        let osString = "macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
-        var model = "Unknown Mac"
-        var size: Int = 0
-        if sysctlbyname("hw.model", nil, &size, nil, 0) == 0 {
-            var machine = [CChar](repeating: 0, count: size)
-            if sysctlbyname("hw.model", &machine, &size, nil, 0) == 0 {
-                model = String(cString: machine)
-            }
-        }
-        let bleState = bleStateProvider?() ?? "unknown"
-        #if DEBUG
-        let buildType = "debug"
-        #else
-        let buildType = "release"
-        #endif
-        let flags = [
-            "imageSync=\(isImageSyncEnabled?() ?? false)",
-            "skipSecrets=\(ClipboardMonitor.skipSecretsEnabled)",
-            "autoUpdate=\(updaterController.updater.automaticallyChecksForUpdates)",
-            "betaChannel=\(isBetaChannelEnabled)",
-        ].joined(separator: ", ")
-        return [
-            ("App Version", "\(version) (\(build)) [\(buildType)]"),
-            ("OS", osString),
-            ("Device", model),
-            ("BLE State", bleState),
-            ("Paired Devices", "\(trustedPeers.count) (\(connectedPeers.count) connected)"),
-            ("Flags", flags),
-        ]
-    }
-
-    @objc
-    private func handleToggleAutoUpdates() {
-        updaterController.updater.automaticallyChecksForUpdates.toggle()
-        renderMenu()
-    }
-
-    private var isBetaChannelEnabled: Bool {
-        let channels = UserDefaults.standard.stringArray(forKey: "SUDefaultChannels") ?? []
-        return channels.contains("beta")
-    }
-
-    @objc
-    private func handleToggleBetaUpdates() {
-        var channels = UserDefaults.standard.stringArray(forKey: "SUDefaultChannels") ?? []
-        if isBetaChannelEnabled {
-            channels.removeAll { $0 == "beta" }
-        } else {
-            channels.append("beta")
-        }
-        if channels.isEmpty {
-            UserDefaults.standard.removeObject(forKey: "SUDefaultChannels")
-        } else {
-            UserDefaults.standard.set(channels, forKey: "SUDefaultChannels")
-        }
-        renderMenu()
+    private func handleOpenSettings() {
+        onOpenSettingsRequested?()
     }
 
     @objc
     private func handleForgetDevice(_ sender: NSMenuItem) {
         guard let token = sender.representedObject as? String else { return }
         onForgetDeviceRequested?(token)
-    }
-}
-
-// MARK: - NSImage tinting
-
-private extension NSImage {
-    /// Returns a copy of the image with every opaque pixel replaced by `color`.
-    func colorized(with color: NSColor) -> NSImage {
-        guard let cgImage = cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            return self
-        }
-        return NSImage(size: size, flipped: false) { rect in
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            ctx.setFillColor(color.cgColor)
-            ctx.fill(rect)
-            ctx.setBlendMode(.destinationIn)
-            ctx.draw(cgImage, in: rect)
-            return true
-        }
     }
 }
