@@ -14,7 +14,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
     func show() {
         model.refresh()
         if window == nil {
-            let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(model: model)))
+            let w = SettingsWindow(contentViewController: NSHostingController(rootView: SettingsView(model: model)))
             w.title = "ClipRelay Settings"
             w.styleMask = [.titled, .closable, .miniaturizable]
             w.isReleasedWhenClosed = false
@@ -28,6 +28,23 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         model.refresh()
+    }
+}
+
+/// The app runs as an accessory with no main menu, so standard window shortcuts don't
+/// exist; handle ⌘W and Esc here.
+private final class SettingsWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == .command, event.charactersIgnoringModifiers == "w" {
+            performClose(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        performClose(nil)
     }
 }
 
